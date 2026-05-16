@@ -1,0 +1,29 @@
+# virtual environment
+venv/
+
+# environment variables
+.env
+
+# data - filings are huge, don't commit them
+data/filings/
+
+# keep the CSV files (they're the output of your work)
+!data/financials.csv
+!data/features.csv
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+
+# IDE
+.idea/
+.vscode/
+
+# scratch files
+z.py
+
+# OS
+.DS_Store
+Thumbs.db
