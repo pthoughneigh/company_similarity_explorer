@@ -10,6 +10,7 @@ data/filings/
 # keep the CSV files (they're the output of your work)
 !data/financials.csv
 !data/features.csv
+!data/features_reduced_PCA.csv
 
 # Python
 __pycache__/
