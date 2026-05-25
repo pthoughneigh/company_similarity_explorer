@@ -48,4 +48,4 @@ def download_filings(tickers: list[str], output_dir: str, max_workers: int = 5) 
 
 
 if __name__ == "__main__":
-    download_filings(TICKERS, "data/filings")
+    download_filings(TICKERS, "../data/filings")

@@ -23,7 +23,12 @@ __pycache__/
 
 # scratch files
 z.py
+patch.py
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Prompts
+prompt_1.md
+prompt_2.md
