@@ -4,13 +4,14 @@ venv/
 # environment variables
 .env
 
-# data - filings are huge, don't commit them
+# data - huge files
 data/filings/
 
-# keep the CSV files (they're the output of your work)
-!data/financials.csv
-!data/features.csv
-!data/features_reduced_PCA.csv
+# keep the CSV files
+!data/features_reduced_TSNE.csv
+!data/features_reduced_MDS.csv
+!data/features_reduced_LDA.csv
+!data/features_reduced_explained_PCA.csv
 
 # Python
 __pycache__/

@@ -7,16 +7,17 @@ from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE, MDS
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 
-from config import SECTOR_MAP
-
+from config import (
+    SECTOR_MAP,
+    INPUT_PATH,
+    PCA_OUTPUT_PATH,
+    PCA_EXPLAINED_OUTPUT_PATH,
+    TSNE_OUTPUT_PATH,
+    MDS_OUTPUT_PATH,
+    LDA_OUTPUT_PATH
+)
 
 logger = logging.getLogger(__name__)
-
-INPUT_PATH = Path(__file__).parent.parent / "data/features.csv"
-PCA_OUTPUT_PATH = Path(__file__).parent.parent / "data/features_reduced_PCA.csv"
-TSNE_OUTPUT_PATH = Path(__file__).parent.parent / "data/features_reduced_TSNE.csv"
-MDS_OUTPUT_PATH = Path(__file__).parent.parent / "data/features_reduced_MDS.csv"
-LDA_OUTPUT_PATH = Path(__file__).parent.parent / "data/features_reduced_LDA.csv"
 
 PROFIT_MARGIN_CLIP_VALUE: float = 1.0
 OCF_MARGIN_CLIP_VALUE: float = 5.0
@@ -171,15 +172,15 @@ def add_sector_labels(df: pd.DataFrame) -> pd.DataFrame:
     Map tickers to their corresponding sector labels and add as a new column.
 
     Looks up each ticker in ``SECTOR_MAP`` and appends the result as a
-    ``sectors`` column. Tickers not found in ``SECTOR_MAP`` will produce
-    ``NaN`` in the ``sectors`` column — a warning is logged in that case.
+    ``sector`` column. Tickers not found in ``SECTOR_MAP`` will produce
+    ``NaN`` in the ``sector`` column — a warning is logged in that case.
 
     Args:
         df: Input DataFrame containing a ``ticker`` column with stock
             ticker symbols. Must not be empty.
 
     Returns:
-        Copy of the input DataFrame with an additional ``sectors`` column
+        Copy of the input DataFrame with an additional ``sector`` column
         containing the sector label for each ticker.
 
     Raises:
@@ -198,9 +199,9 @@ def add_sector_labels(df: pd.DataFrame) -> pd.DataFrame:
     logger.debug("Adding sector labels to %d rows.", len(df))
 
     df = df.copy()
-    df["sectors"] = df["ticker"].map(SECTOR_MAP)
+    df["sector"] = df["ticker"].map(SECTOR_MAP)
 
-    unmapped = df["ticker"][df["sectors"].isna()].unique().tolist()
+    unmapped = df["ticker"][df["sector"].isna()].unique().tolist()
     if unmapped:
         logger.warning(
             "%d ticker(s) not found in SECTOR_MAP and will be NaN: %s.",
@@ -209,7 +210,7 @@ def add_sector_labels(df: pd.DataFrame) -> pd.DataFrame:
 
     logger.debug(
         "Sector labels added. Unique sectors found: %d.",
-        df["sectors"].nunique(),
+        df["sector"].nunique(),
     )
 
     return df
@@ -237,7 +238,7 @@ def save_features(df: pd.DataFrame, output_path: Path) -> None:
     logger.info("Saved %d rows to %s.", df.shape[0], output_path.name)
 
 
-def run_pca(df: pd.DataFrame, n_components: int = 2) -> pd.DataFrame:
+def run_pca(df: pd.DataFrame, numeric_cols: pd.Index, n_components: int = 2) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Run PCA on scaled numeric features and return the principal components.
 
@@ -245,12 +246,17 @@ def run_pca(df: pd.DataFrame, n_components: int = 2) -> pd.DataFrame:
         df: Scaled input DataFrame. Should have been passed through
             scale_features() before calling this. Must not contain
             NaN or infinite values.
-        n_components: Number of principal components to retain. Typically 2
+        n_components: Number of principal components to retain. Typically, 2
             for visualization. Cannot exceed the number of numeric columns.
+        numeric_cols: Index of numeric column names to use as model input.
+            Typically obtained from ``df.select_dtypes(include="number").columns``.
 
     Returns:
-        DataFrame of shape ``(n_rows, n_components)`` with columns
-        ``PC1``, ``PC2``, etc., with the ticker column preserved.
+        Tuple of two DataFrames:
+            - Components DataFrame of shape ``(n_rows, n_components)`` with columns
+              ``PC1``, ``PC2``, etc., with the ticker column preserved.
+            - Explained variance DataFrame with columns ``component`` and
+              ``explained_variance_ratio``, one row per component.
 
     Raises:
         ValueError: If ``df`` is empty, contains no numeric columns, or if
@@ -265,8 +271,6 @@ def run_pca(df: pd.DataFrame, n_components: int = 2) -> pd.DataFrame:
 
     if df.empty:
         raise ValueError("DataFrame is empty.")
-
-    numeric_cols = df.select_dtypes(include="number").columns
 
     if len(numeric_cols) == 0:
         raise ValueError("DataFrame contains no numeric columns.")
@@ -283,14 +287,15 @@ def run_pca(df: pd.DataFrame, n_components: int = 2) -> pd.DataFrame:
     components = pca.fit_transform(df[numeric_cols])
 
     explained = pca.explained_variance_ratio_
-    logger.info(
-        "PCA complete | %d components explain %.1f%% of variance. Per component: %s.",
-        n_components,
-        explained.sum() * 100,
-        [("%.1f%%" % (v * 100)) for v in explained],
-    )
 
     pc_cols = ["PC%d" % (i + 1) for i in range(n_components)]
+    explained_df = pd.DataFrame({
+        "component": pc_cols,
+        "explained_variance_ratio": explained,
+    })
+
+    logger.info("Per-component variance: %s.", [("%.1f%%" % (v * 100)) for v in explained])
+
     result = pd.DataFrame(components, columns=pc_cols, index=df.index)
 
     if "ticker" in df.columns:
@@ -301,11 +306,12 @@ def run_pca(df: pd.DataFrame, n_components: int = 2) -> pd.DataFrame:
         result.shape, list(result.columns),
     )
 
-    return result
+    return result, explained_df
 
 
 def run_tsne(
     df: pd.DataFrame,
+    numeric_cols: pd.Index,
     n_components: int = 2,
     perplexity: int = 30,
     random_state: int = 42,
@@ -317,13 +323,15 @@ def run_tsne(
         df: Scaled input DataFrame. Should have been passed through
             scale_features() before calling this. Must not contain
             NaN or infinite values.
-        n_components: Dimensionality of the embedding space. Typically 2
+        n_components: Dimensionality of the embedding space. Typically, 2
             for visualization. Values above 3 are rarely useful.
         perplexity: Controls the effective number of neighbors considered
             per point. Must be less than ``len(df)``. Typical range is
             [5, 50]; sklearn's default is 30; larger datasets can tolerate higher values.
         random_state: Seed for the random number generator. Note that
             results may still differ across sklearn versions or platforms.
+        numeric_cols: Index of numeric column names to use as model input.
+            Typically obtained from ``df.select_dtypes(include="number").columns``.
 
     Returns:
         DataFrame of shape ``(n_rows, n_components)`` with columns
@@ -350,11 +358,6 @@ def run_tsne(
             "perplexity (%d) must be greater than 0 and less than n_samples (%d)."
             % (perplexity, len(df))
         )
-
-    numeric_cols = df.select_dtypes(include="number").columns
-
-    if len(numeric_cols) == 0:
-        raise ValueError("DataFrame contains no numeric columns.")
 
     logger.debug(
         "Fitting t-SNE on %d columns: %s.", len(numeric_cols), list(numeric_cols)
@@ -383,6 +386,7 @@ def run_tsne(
 
 def run_mds(
     df: pd.DataFrame,
+    numeric_cols: pd.Index,
     n_components: int = 2,
     random_state: int = 42,
 ) -> pd.DataFrame:
@@ -393,10 +397,12 @@ def run_mds(
         df: Scaled input DataFrame. Should have been passed through
             scale_features() before calling this. Must not contain
             NaN or infinite values.
-        n_components: Dimensionality of the embedding space. Typically 2
+        n_components: Dimensionality of the embedding space. Typically, 2
             for visualization. Values above 3 are rarely useful.
         random_state: Seed for the random number generator. Note that
             results may still differ across sklearn versions or platforms.
+        numeric_cols: Index of numeric column names to use as model input.
+            Typically obtained from ``df.select_dtypes(include="number").columns``.
 
     Returns:
         DataFrame of shape ``(n_rows, n_components)`` with columns
@@ -417,11 +423,6 @@ def run_mds(
 
     if df.empty:
         raise ValueError("DataFrame is empty.")
-
-    numeric_cols = df.select_dtypes(include="number").columns
-
-    if len(numeric_cols) == 0:
-        raise ValueError("DataFrame contains no numeric columns.")
 
     if n_components >= len(df):
         raise ValueError(
@@ -449,24 +450,26 @@ def run_mds(
 
     return result
 
-def run_lda(df: pd.DataFrame, n_components: int = 2) -> pd.DataFrame:
+def run_lda(df: pd.DataFrame, numeric_cols: pd.Index, n_components: int = 2) -> pd.DataFrame:
     """
     Run LDA on scaled numeric features and return embeddings in reduced space.
 
-    Unlike PCA, LDA uses class labels (``sectors``) to find the directions
+    Unlike PCA, LDA uses class labels (``sector``) to find the directions
     that maximally separate the classes, rather than directions of maximum
     variance. The number of meaningful components is bounded by ``k - 1``
     where ``k`` is the number of unique sectors.
 
     Args:
-        df: Scaled input DataFrame containing a ``sectors`` column for class
+        df: Scaled input DataFrame containing a ``sector`` column for class
             labels and a ``ticker`` column for identification. Should have
             been passed through ``scale_features()`` and
             ``add_sector_labels()`` before calling this. Must not contain
             NaN or infinite values.
         n_components: Dimensionality of the embedding space. Cannot exceed
             ``k - 1`` where ``k`` is the number of unique classes in the
-            ``sectors`` column. Typically 2 for visualization.
+            ``sector`` column. Typically, 2 for visualization.
+        numeric_cols: Index of numeric column names to use as model input.
+            Typically obtained from ``df.select_dtypes(include="number").columns``.
 
     Returns:
         DataFrame of shape ``(n_rows, n_components)`` with columns
@@ -474,10 +477,10 @@ def run_lda(df: pd.DataFrame, n_components: int = 2) -> pd.DataFrame:
 
     Raises:
         ValueError: If ``df`` is empty or contains no numeric columns.
-        ValueError: If the ``sectors`` column is missing or contains
+        ValueError: If the ``sector`` column is missing or contains
             fewer than 2 unique classes.
         ValueError: If ``n_components`` exceeds ``k - 1`` where ``k``
-            is the number of unique classes in ``sectors``.
+            is the number of unique classes in ``sector``.
     """
     logger.debug(
         "run_lda called | rows=%d, n_components=%d.",
@@ -489,33 +492,28 @@ def run_lda(df: pd.DataFrame, n_components: int = 2) -> pd.DataFrame:
     if df.empty:
         raise ValueError("DataFrame is empty.")
 
-    if "sectors" not in df.columns:
+    if "sector" not in df.columns:
         raise ValueError(
-            "DataFrame must contain a 'sectors' column. "
+            "DataFrame must contain a 'sector' column. "
             "Call add_sector_labels() before run_lda()."
         )
 
-    n_classes = df["sectors"].nunique()
+    n_classes = df["sector"].nunique()
     if n_classes < 2:
         raise ValueError(
-            "LDA requires at least 2 unique classes in 'sectors', found %d."
+            "LDA requires at least 2 unique classes in 'sector', found %d."
             % n_classes
         )
 
     if n_components > n_classes - 1:
         raise ValueError(
             "n_components (%d) cannot exceed k - 1 = %d "
-            "where k=%d is the number of unique sectors."
+            "where k=%d is the number of unique sector."
             % (n_components, n_classes - 1, n_classes)
         )
 
-    drop_cols = [col for col in ("sectors", "ticker") if col in df.columns]
-    X = df.drop(columns=drop_cols)
-    y = df["sectors"]
-
-    numeric_cols = X.select_dtypes(include="number").columns
-    if len(numeric_cols) == 0:
-        raise ValueError("DataFrame contains no numeric columns.")
+    x = df[numeric_cols]
+    y = df["sector"]
 
     logger.debug(
         "Fitting LDA on %d columns across %d classes: %s.",
@@ -523,7 +521,7 @@ def run_lda(df: pd.DataFrame, n_components: int = 2) -> pd.DataFrame:
     )
 
     lda = LDA(n_components=n_components)
-    components = lda.fit_transform(X[numeric_cols], y)
+    components = lda.fit_transform(x, y)
 
     explained = lda.explained_variance_ratio_
     logger.info(
@@ -560,6 +558,9 @@ def load_and_run() -> tuple[pd.DataFrame, ...]:
         Tuple of four DataFrames containing PCA components, t-SNE
         embeddings, MDS embeddings, and LDA embeddings respectively,
         each with the ticker column preserved.
+        - result_pca: Full PCA DataFrame with all ``n_components`` columns.
+        Only ``PC1`` and ``PC2`` are written to disk; the full DataFrame
+        is returned to the caller
 
     Raises:
         FileNotFoundError: If the input file does not exist.
@@ -573,14 +574,21 @@ def load_and_run() -> tuple[pd.DataFrame, ...]:
         df = load_features(INPUT_PATH)
         df = clip_features(df)
         df = scale_features(df)
-        result_pca = run_pca(df)
-        result_tsne = run_tsne(df)
-        result_mds = run_mds(df)
+
+        numeric_cols = df.select_dtypes(include="number").columns
+        if len(numeric_cols) == 0:
+            raise ValueError("DataFrame contains no numeric columns.")
+
+        result_pca, result_explained = run_pca(df, numeric_cols, n_components=len(numeric_cols))
+        result_pca_saved = result_pca[["ticker", "PC1", "PC2"]]
+        result_tsne = run_tsne(df, numeric_cols)
+        result_mds = run_mds(df, numeric_cols)
 
         df = add_sector_labels(df)
+        results_lda = run_lda(df, numeric_cols)
 
-        results_lda = run_lda(df)
-        save_features(result_pca, PCA_OUTPUT_PATH)
+        save_features(result_pca_saved, PCA_OUTPUT_PATH)
+        save_features(result_explained, PCA_EXPLAINED_OUTPUT_PATH)
         save_features(result_tsne, TSNE_OUTPUT_PATH)
         save_features(result_mds, MDS_OUTPUT_PATH)
         save_features(results_lda, LDA_OUTPUT_PATH)
@@ -589,7 +597,10 @@ def load_and_run() -> tuple[pd.DataFrame, ...]:
         logger.error("Pipeline failed: %s: %s.", type(e).__name__, e)
         raise
 
-    logger.info("PCA pipeline complete | output shape=%s.", result_pca.shape)
+    logger.info(
+        "PCA pipeline complete | full shape=%s, saved shape=%s.",
+        result_pca.shape, result_pca_saved.shape,
+    )
     logger.info("t-SNE pipeline complete | output shape=%s.", result_tsne.shape)
     logger.info("MDS pipeline complete | output shape=%s.", result_mds.shape)
     logger.info("LDA pipeline complete | output shape=%s.", results_lda.shape)
@@ -602,4 +613,3 @@ if __name__ == "__main__":
     )
 
     pca_df, tsne_df, mds_df, lda_df = load_and_run()
-    print(lda_df)

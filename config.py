@@ -1,3 +1,5 @@
+from pathlib import Path
+
 # ---------------------------------------------------------------------------
 # Sector definitions and ticker registry
 # ---------------------------------------------------------------------------
@@ -96,3 +98,10 @@ TICKERS: list[str] = [
     for tickers in SECTORS.values()
     for ticker in tickers
 ]
+
+INPUT_PATH = Path(__file__).parent / "data/features.csv"
+PCA_OUTPUT_PATH = Path(__file__).parent / "data/features_reduced_PCA.csv"
+PCA_EXPLAINED_OUTPUT_PATH = Path(__file__).parent / "data/features_reduced_explained_PCA.csv"
+TSNE_OUTPUT_PATH = Path(__file__).parent / "data/features_reduced_TSNE.csv"
+MDS_OUTPUT_PATH = Path(__file__).parent / "data/features_reduced_MDS.csv"
+LDA_OUTPUT_PATH = Path(__file__).parent / "data/features_reduced_LDA.csv"
